@@ -1,4 +1,8 @@
 #!/bin/sh
+# KUAL starts this script with stdout on a pipe nobody reads, so every write
+# to it fails. Send it to /dev/null unless a terminal is attached (so file
+# redirects are discarded too; use a tty to see output).
+[ -t 1 ] || exec >/dev/null
 source ./utils.sh
 
 ###############################################################################
@@ -29,6 +33,8 @@ DIR="$(dirname "$0")"
 # Temporary folder to hold downloaded files
 TMP_DIR="/tmp/trmnl-kindle"
 mkdir -p "$TMP_DIR"
+DASHBOARD_CACHE="$TMP_DIR/.dashboard-$$.png"
+LAST_IMAGE_VALID=0
 
 # Coordinates for displaying the PNG in *pixels*
 DISPLAY_X=0
@@ -52,6 +58,7 @@ WIFI_MANAGEMENT=${WIFI_DISABLED_DURING_SLEEP}
 if [ -e ./TRMNL_config.sh ]; then
   source ./TRMNL_config.sh
 fi
+export PING_TIMEOUT
 
 # IP or domain used to test if network is up (without the protocol, port or
 # path)
@@ -78,17 +85,34 @@ DEBUG_Y=0
 # and increments DEBUG_Y for each new line.
 eips_debug() {
   if [ "$DEBUG_MODE" = true ]; then
-    eips "${DEBUG_X}" "${DEBUG_Y}" "$1"
+    run_with_timeout "$EIPS_TIMEOUT" eips "${DEBUG_X}" "${DEBUG_Y}" "$1"
     echo "$1" #Also echo to terminal
     DEBUG_Y=$((DEBUG_Y+1))
   fi
 }
 
 init() {
-  /etc/init.d/framework stop
-  initctl stop webreader >/dev/null 2>&1
+  # Save the Kindle screen before drawing anything.
+  local DEBUG_MODE=false
+  exit_status startup
+  capture_trmnl_state
+  # Devices using Upstart keep the Kindle UI running.
+  if [ -x /etc/init.d/framework ]; then
+    if /etc/init.d/framework stop; then
+      [ "$FRAMEWORK_STATE" != running ] || FRAMEWORK_STOPPED=1
+    else
+      CAN_EXIT=0 RESTORE_INCOMPLETE=1
+      exit_status 'ineligible init-failed framework'
+    fi
+  fi
+  if initctl stop webreader >/dev/null 2>&1; then
+    [ "$WEBREADER_STATE" != running ] || WEBREADER_STOPPED=1
+  elif [ "$WEBREADER_STATE" = running ]; then
+    CAN_EXIT=0 RESTORE_INCOMPLETE=1
+    exit_status 'ineligible init-failed webreader'
+  fi
   echo powersave >/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-  lipc-set-prop com.lab126.powerd preventScreenSaver 1
+  run_with_timeout "$LIPC_TIMEOUT" lipc-set-prop com.lab126.powerd preventScreenSaver 1
   
   # Preserve the configured WiFi state during successful sleep periods.
   if [ ${WIFI_MANAGEMENT} -eq ${WIFI_ALWAYS_ON} ]; then
@@ -99,37 +123,64 @@ init() {
     INITIAL_WIFI_STATE=0
   else
     eips_debug "WiFi will keep initial state during sleep"
-    INITIAL_WIFI_STATE=$(lipc-get-prop com.lab126.cmd wirelessEnable)
+    INITIAL_WIFI_STATE=$ORIGINAL_WIFI
   fi
   eips_debug "Setting intitial WiFi state to: ${INITIAL_WIFI_STATE}"
-  lipc-set-prop com.lab126.cmd wirelessEnable ${INITIAL_WIFI_STATE}
+  run_with_timeout "$LIPC_TIMEOUT" lipc-set-prop com.lab126.cmd wirelessEnable ${INITIAL_WIFI_STATE}
 }
 
 wifi_up() {
+  set_stage wifi-wait
   # A loaded interface allows the existing fetch path even when ICMP is blocked.
   "$DIR/wait-for-wifi.sh" "$WIFI_TEST_ADDRESS" || [ -e /sys/class/net/wlan0 ]
 }
 
 go_to_sleep() {
+  set_stage sleep-prepare
   eips_debug "Sleeping for $REFRESH_RATE seconds..."
   if [ "$INITIAL_WIFI_STATE" != 1 ]; then
     eips_debug "Disabling WiFi"
-    lipc-set-prop com.lab126.cmd wirelessEnable 0
+    run_with_timeout "$LIPC_TIMEOUT" lipc-set-prop com.lab126.cmd wirelessEnable 0
   fi
 
   # Allow time to abort the script and finish refreshing the screen.
   sleep 10
-  echo 0 > /sys/class/rtc/rtc1/wakealarm
-  echo "+${REFRESH_RATE}" > /sys/class/rtc/rtc1/wakealarm
-  echo "mem" > /sys/power/state
+  OWNED_ALARM=
+  if echo 0 > /sys/class/rtc/rtc1/wakealarm &&
+      echo "+${REFRESH_RATE}" > /sys/class/rtc/rtc1/wakealarm; then
+    OWNED_ALARM=$(cat /sys/class/rtc/rtc1/wakealarm)
+    case "$OWNED_ALARM" in ''|*[!0-9]*|0*|???????????*) OWNED_ALARM= ;; esac
+  else
+    exit_status 'alarm-write-failed'
+  fi
+  sync || echo 'TRMNL: sync failed' >&2
+  set_stage suspend
+  if echo "mem" > /sys/power/state; then
+    set_stage resume
+    offer_early_exit "$OWNED_ALARM" "$(cat /sys/class/rtc/rtc1/since_epoch 2>/dev/null)"
+  else
+    exit_status 'suspend-write-failed'
+  fi
 }
 
 init
+trap restore_trmnl EXIT
+trap 'exit 0' TERM INT HUP
+capture_stock_screen
+if [ "$CAN_EXIT" = 1 ]; then
+  if select_exit_input; then
+    exit_status "eligible $EXIT_LABEL"
+  else
+    CAN_EXIT=0
+    exit_status "ineligible $EXIT_UNAVAILABLE_REASON"
+  fi
+fi
 REFRESH_RATE=$MIN_REFRESH_RATE
 while true; do
+  set_stage loop-start
   # Clear the screen only if in debug mode, otherwise clear right before displaying the image
   if [ "$DEBUG_MODE" = true ]; then
-    eips -c
+    run_with_timeout "$EIPS_TIMEOUT" eips -c
     sleep 1
   fi
 
@@ -140,30 +191,36 @@ while true; do
   eips_debug "TRMNL Kindle Debug Script"
 
   eips_debug "Wait for wifi..."
+  set_stage wifi-enable
   # enable wireless if it is currently off
-  if [ 0 -eq `lipc-get-prop com.lab126.cmd wirelessEnable` ]; then
+  WIFI_STATE=$(run_with_timeout "$LIPC_TIMEOUT" lipc-get-prop com.lab126.cmd wirelessEnable)
+  if [ "$WIFI_STATE" != 1 ]; then
     eips_debug "WiFi is off, turning it on now"
-    lipc-set-prop com.lab126.cmd wirelessEnable 1
+    run_with_timeout "$LIPC_TIMEOUT" lipc-set-prop com.lab126.cmd wirelessEnable 1
     #lipc-set-prop com.lab126.wifid enable 1 
   fi
   if ! wifi_up; then
-    lipc-set-prop com.lab126.cmd wirelessEnable 0
+    set_stage wifi-retry
+    run_with_timeout "$LIPC_TIMEOUT" lipc-set-prop com.lab126.cmd wirelessEnable 0
     sleep 20
-    lipc-set-prop com.lab126.cmd wirelessEnable 1
+    run_with_timeout "$LIPC_TIMEOUT" lipc-set-prop com.lab126.cmd wirelessEnable 1
     if ! wifi_up; then
-      eips -g "$DIR/wifi-error.png"
-      lipc-set-prop com.lab126.cmd wirelessEnable 0
+      set_stage wifi-failed
+      exit_status 'retry reason=wifi-failed action=suspend'
+      run_with_timeout "$EIPS_TIMEOUT" eips -g "$DIR/wifi-error.png"
+      run_with_timeout "$LIPC_TIMEOUT" lipc-set-prop com.lab126.cmd wirelessEnable 0
       go_to_sleep
       continue
     fi
   fi
 
+  set_stage fetch-metadata
   eips_debug "Fetching JSON..."
 
   # 2) Fetch JSON metadata
   BATTERY_PERCENT=$(get_kindle_battery)
   RESPONSE="$(
-    curl -sL \
+    run_with_timeout "$METADATA_TIMEOUT" curl -sL \
       -H "access-token: $API_KEY" \
       -H "percent-charged: ${BATTERY_PERCENT}" \
       -H "png-width: $PNG_WIDTH" \
@@ -176,6 +233,7 @@ while true; do
 
   # If no response, display error and retry
   if [ -z "$RESPONSE" ]; then
+    exit_status 'retry reason=metadata-empty delay=60'
     eips_debug "Error: No JSON response."
     eips_debug "Retry in 60s..."
     sleep 60
@@ -198,6 +256,7 @@ while true; do
 
   # Quick check for missing URL
   if [ -z "$IMAGE_URL" ]; then
+    exit_status 'retry reason=image-url-missing delay=60'
     eips_debug "Error: Unable to parse image_url from JSON."
     eips_debug "Retry in 60s..."
     sleep 60
@@ -226,17 +285,16 @@ while true; do
   eips_debug "Refresh: ${REFRESH_RATE}s"
 
   # 4) Download the image via the proxy endpoint using POST with full JSON
+  set_stage fetch-image
   IMAGE_PATH="$TMP_DIR/$FILENAME"
   rm -f "$IMAGE_PATH"
   eips_debug "Downloading image..."
 
   # Download the image directly from IMAGE_URL
-  curl -sL -o "$IMAGE_PATH" \
+  if ! run_with_timeout "$IMAGE_TIMEOUT" curl -sL -o "$IMAGE_PATH" \
     -A "$USER_AGENT" \
-    "$IMAGE_URL"
-
-  # Check download success
-  if [ ! -s "$IMAGE_PATH" ]; then
+    "$IMAGE_URL" || [ ! -s "$IMAGE_PATH" ]; then
+    exit_status 'retry reason=image-download delay=60'
     eips_debug "Error: Download failed!"
     eips_debug "Retry in 60s..."
     sleep 60
@@ -247,23 +305,21 @@ while true; do
   eips_debug "Clearing screen to show image..."
 
   # 5) Display the downloaded image
+  set_stage display
   # Always clear screen before showing the image
-  eips -c
+  run_with_timeout "$EIPS_TIMEOUT" eips -c
   sleep 1
   # eips on particular old Kindles (e.g. Kindle 4) does not support -x -y for
   # image display (-g). Try to naively detect this by checking for -y existence
   # in the usage strings
-  if eips | grep -q -v "\-y" ; then
-    eips_debug "Using compatiblity mode for image plotting"
-    eips -g "$IMAGE_PATH"
-  else
-    eips -g "$IMAGE_PATH" -x "$DISPLAY_X" -y "$DISPLAY_Y"
+  if display_image "$IMAGE_PATH"; then
+    cache_displayed_image "$IMAGE_PATH"
   fi
 
   # 6) Print full URL & filename below the displayed image only if debug mode is on
   if [ "$DEBUG_MODE" = true ]; then
-    eips 0 18 "URL: $IMAGE_URL"
-    eips 0 19 "File: $IMAGE_PATH"
+    run_with_timeout "$EIPS_TIMEOUT" eips 0 18 "URL: $IMAGE_URL"
+    run_with_timeout "$EIPS_TIMEOUT" eips 0 19 "File: $IMAGE_PATH"
   fi
 
   go_to_sleep

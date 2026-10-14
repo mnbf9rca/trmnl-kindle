@@ -5,12 +5,13 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
 # Only device commands are faked; the production loop and readiness helper run.
 STUB = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 p = pathlib.Path(os.environ['CASE_DIR'])
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 state = json.loads((p/'state').read_text())
@@ -22,24 +23,37 @@ def event(*value):
     with (p/'events').open('a') as f:
         f.write(json.dumps([state['cycle'], *value])+'\n')
 def mode():
-    return plans[state['cycle']][state['retry']]
+    return plans[min(state['cycle'], len(plans)-1)][state['retry']]
 def update_interface():
     if state['wifi'] == 1 and mode() != 'bad':
         interface.mkdir(parents=True, exist_ok=True)
     elif interface.exists():
         interface.rmdir()
-if name == 'ping':
+if name == 'cat' and args == [str(p/'fb')]:
+    event('snapshot-read')
+    sys.stdout.buffer.write((p/'fb').read_bytes())
+elif name == 'cat':
+    os.execv('/bin/cat', ['cat', *args])
+elif name == 'ping':
     sys.exit(0 if interface.exists() and mode() != 'icmp' else 1)
 elif name == 'lipc-get-prop':
     if args[-1] == 'wirelessEnable':
         if state.pop('empty_read', False): save()
         else: print(state['wifi'])
     elif args[-1] == 'status': print('Battery Level: 50%')
+    elif args[-1] == 'preventScreenSaver': print(0)
 elif name == 'lipc-set-prop' and args[-2] == 'wirelessEnable':
     state['wifi'] = int(args[-1]); save(); update_interface()
     event('wifi', state['wifi'])
+    stage_path = p/'last-stage'
+    stage = stage_path.read_text().strip() if stage_path.exists() else ''
+    if os.environ.get('HANG_RETRY_OFF') == '1' and state['wifi'] == 0 and stage == 'wifi-retry' and not state['hung_retry_off']:
+        state['hung_retry_off'] = True; save()
+        while True: time.sleep(1)
 elif name == 'eips':
-    if args == ['-i']: print('xres: 600 yres: 800')
+    if args == ['-i']:
+        print('smem_len: 16\nxres: 4 yres: 4\nbits_per_pixel: 8 grayscale: 1\nrotate: 0\n'
+              'ywrapstep: 0 line_length: 4\nxres_virtual: 4 yres_virtual: 4\nxoffset: 0 yoffset: 0')
     elif not args: print('usage -y')
     # Native eips on the tested Kindle rejects !: character not available.
     elif args == ['0', '0', '!']: sys.exit(1)
@@ -47,10 +61,18 @@ elif name == 'eips':
         if args[0] == '-g':
             assert pathlib.Path(args[1]).is_file(), 'display image missing'
         event('screen', *args)
+        if args[0] == '-s':
+            assert (p/'fb').read_bytes() == b'0123456789abcdef', 'stock restore before refresh'
+        else:
+            (p/'fb').write_bytes(b'dashboard-bytes!')
 elif name == 'curl':
     assert state['wifi'] == 1 and interface.exists(), 'fetch without network'
     event('image' if '-o' in args else 'metadata')
     if '-o' in args:
+        if os.environ.get('FAILED_IMAGE') == '1' and state['cycle'] == 1:
+            pathlib.Path(args[args.index('-o')+1]).write_text('partial')
+            event('failed-image')
+            sys.exit(7)
         pathlib.Path(args[args.index('-o')+1]).write_text('image')
     else:
         print('{"image_url":"https://example.invalid/image","filename":"display.png","refresh_rate":900}')
@@ -59,35 +81,44 @@ elif name == 'sleep':
     if args == ['20']:
         state['retry'] += 1; save()
         assert state['retry'] == 1, 'more than one activation retry'
+    if args == ['60'] and os.environ.get('FAILED_IMAGE') == '1':
+        cache = list((p/'cache').glob('.dashboard-*.png'))
+        assert len(cache) == 1 and cache[0].read_text() == 'image', 'failed download replaced dashboard'
+        event('cache-preserved')
+        state['cycle'] += 1; state['retry'] = 0; save(); update_interface()
 elif name == 'test-suspend':
     event('suspend', (p/'sys/class/rtc/rtc1/wakealarm').read_text().strip(), state['wifi'])
     state['cycle'] += 1; state['retry'] = 0; save()
     if state['cycle'] == len(plans): sys.exit(99)
     update_interface()
+elif name == 'initctl' and args[0] == 'status':
+    print(args[1], 'start/running')
 '''
 
 
-def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=False):
+def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=False, failed_image=False, hang_retry_off=False, closed_stdout=False):
     with tempfile.TemporaryDirectory() as directory:
         p = Path(directory)
         (p/'bin').mkdir()
-        for command in ['ping', 'lipc-get-prop', 'lipc-set-prop', 'eips', 'curl', 'sleep', 'test-suspend', 'initctl']:
+        for command in ['cat', 'ping', 'lipc-get-prop', 'lipc-set-prop', 'eips', 'curl', 'sleep', 'test-suspend', 'initctl']:
             path = p/'bin'/command
             path.write_text(STUB)
             path.chmod(0o755)
-        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=empty_read)))
+        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=empty_read, hung_retry_off=False)))
         if initial == 1 and plans[0][0] != 'bad':
             (p/'sys/class/net/wlan0').mkdir(parents=True)
         (p/'events').touch()
+        (p/'fb').write_bytes(b'0123456789abcdef')
         (p/'wifi-error.png').write_bytes((ROOT/'zip_example/wifi-error.png').read_bytes())
         for filename in ['sys/class/rtc/rtc1/wakealarm', 'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor']:
             (p/filename).parent.mkdir(parents=True, exist_ok=True)
+        (p/'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor').write_text('ondemand')
         # Copy only known source files, never credentials or a user's config.
         for filename in ['TRMNL.sh', 'utils.sh', 'wait-for-wifi.sh']:
             script = (ROOT/'zip_example'/filename).read_text()
             if filename == 'TRMNL.sh':
                 replacements = {
-                    '/etc/init.d/framework stop': ':',
+                    '/etc/init.d/framework': str(p/'framework'),
                     'MAC_ADDRESS=$(get_mac_address)': 'MAC_ADDRESS=TEST_MAC',
                     'echo "mem" > /sys/power/state': 'test-suspend || exit $?',
                     '/sys/': str(p/'sys')+'/',
@@ -97,20 +128,47 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
                     assert old in script, f'hardware substitution missing: {old}'
                     script = script.replace(old, new)
             else:
-                script = script.replace('/sys/', str(p/'sys')+'/')
+                script = script.replace('/sys/', str(p/'sys')+'/').replace('/etc/init.d/framework', str(p/'framework'))
+            script = script.replace('/dev/fb0', str(p/'fb'))
             # Any remaining hardware paths must be inside the disposable directory.
             assert '/etc/init.d/' not in script
             assert '/sys/' not in script.replace(str(p/'sys')+'/', ''), filename
             (p/filename).write_text(script)
         (p/'wait-for-wifi.sh').chmod(0o755)
         (p/'TRMNL_config.sh').write_text(
-            f'API_KEY=TEST_ONLY\nMIN_REFRESH_RATE=420\nWIFI_MANAGEMENT={policy}\nDEBUG_MODE={str(debug).lower()}\n')
-        env = dict(os.environ, PATH=str(p/'bin')+':'+os.environ['PATH'], CASE_DIR=str(p), PLANS=json.dumps(plans))
-        result = subprocess.run(['bash', './TRMNL.sh'], cwd=p, env=env, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 99 and not result.stderr, (name, result.returncode, result.stderr)
+            f'API_KEY=TEST_ONLY\nMIN_REFRESH_RATE=420\nWIFI_MANAGEMENT={policy}\nDEBUG_MODE={str(debug).lower()}\n'
+            + ('LIPC_TIMEOUT=2\nEIPS_TIMEOUT=20\n' if hang_retry_off else ''))
+        env = dict(os.environ, PATH=str(p/'bin')+':'+os.environ['PATH'], CASE_DIR=str(p), PLANS=json.dumps(plans), FAILED_IMAGE=str(int(failed_image)), HANG_RETRY_OFF=str(int(hang_retry_off)))
+        started = time.monotonic()
+        # KUAL leaves the script with a dead stdout; a closed descriptor fails the same way.
+        # TRMNL.sh must redirect it first: the exact stderr check below catches any write error.
+        command = ['bash', '-c', 'exec >&-; exec bash ./TRMNL.sh'] if closed_stdout else ['bash', './TRMNL.sh']
+        result = subprocess.run(command, cwd=p, env=env, capture_output=True, text=True, timeout=30)
+        elapsed = time.monotonic() - started
+        expected_stderr = ('TRMNL: exit confirmation unavailable (original state unavailable)\n'
+                           'TRMNL: restoration incomplete (original state unavailable or restore failed)\n') if empty_read else ''
+        assert result.returncode == 99 and result.stderr == expected_stderr, (name, result.returncode, result.stderr)
+        if hang_retry_off:
+            assert elapsed < 20, (name, elapsed)
+            assert json.loads((p/'state').read_text())['hung_retry_off'], name
+            log = (p/'exit-status.log').read_text()
+            assert log.count('timeout command=lipc-set-prop seconds=2') == 1, log
+            assert sum(' timeout command=' in line for line in log.splitlines()) == 1, log
+            assert 'retry reason=wifi-failed action=suspend' in log, log
+            assert (p/'last-stage').read_text() == 'suspend\n', name
+        if empty_read:
+            assert 'Tap anywhere' not in (p/'events').read_text(), 'capture failure offered exit'
         events = [json.loads(line) for line in (p/'events').read_text().splitlines()]
+        assert sum(e[1] == 'snapshot-read' for e in events) == 1, events
+        capture = next(i for i, e in enumerate(events) if e[1] == 'snapshot-read')
+        assert all(i > capture for i, e in enumerate(events) if e[1] == 'screen'), events
+        assert not list((p/'cache').glob('.stock-*.fb')), 'snapshot leaked at exit'
         for cycle, (plan, delay) in enumerate(zip(plans, delays)):
             actual = [e[1:] for e in events if e[0] == cycle]
+            if failed_image and cycle == 1:
+                assert ['failed-image'] in actual and ['cache-preserved'] in actual, (name, actual)
+                assert not any(e[0] in ('screen', 'suspend') for e in actual), (name, actual)
+                continue
             failed = plan[-1] == 'bad'
             assert [e[1] for e in actual if e[0] == 'suspend'] == [f'+{delay}'], (name, actual)
             assert actual.count(['sleep', 20]) == (1 if plan[0] == 'bad' else 0), (name, actual)
@@ -136,7 +194,27 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
         print('PASS', name)
 
 
+def run_wait_loop_case(name):
+    """The readiness helper must give up even when every stdout write fails."""
+    with tempfile.TemporaryDirectory() as directory:
+        p = Path(directory)
+        (p/'bin').mkdir()
+        for command, body in [('ping', 'echo ping >>attempts; exit 1'), ('sleep', 'exit 0')]:
+            (p/'bin'/command).write_text(f'#!/bin/sh\n{body}\n')
+            (p/'bin'/command).chmod(0o755)
+        for filename in ['utils.sh', 'wait-for-wifi.sh']:
+            (p/filename).write_text((ROOT/'zip_example'/filename).read_text())
+        env = dict(os.environ, PATH=str(p/'bin')+':'+os.environ['PATH'], PING_TIMEOUT='1')
+        result = subprocess.run(['bash', '-c', 'exec >&-; exec bash ./wait-for-wifi.sh 10.255.255.1'],
+                                cwd=p, env=env, capture_output=True, text=True, timeout=20)
+        assert result.returncode == 1, (name, result.returncode, result.stderr)
+        assert (p/'attempts').read_text().count('ping') == 31, name  # max_retry + 1, then give up
+        print('PASS', name)
+
+
 if __name__ == '__main__':
+    run_wait_loop_case('readiness helper gives up with dead stdout')
+    run_case('failure then next-wake recovery with dead stdout', [['bad', 'bad'], ['up']], [420, 900], closed_stdout=True)
     run_case('failure then next-wake recovery', [['bad', 'bad'], ['up']], [420, 900])
     run_case('one retry recovers', [['bad', 'up']], [900])
     run_case('filtered ICMP', [['icmp', 'icmp']], [900])
@@ -144,4 +222,6 @@ if __name__ == '__main__':
     for policy, initial in [(1, 1), (0, 1), (0, 0)]:
         run_case(f'policy {policy}, initial {initial}', [['bad', 'bad'], ['up']], [420, 900], policy, initial)
     run_case('debug failure retains upstream diagnostics', [['up'], ['bad', 'bad']], [900, 900], debug=True)
-    run_case('unknown initial auto state sleeps with Wi-Fi off', [['up']], [900], policy=0, empty_read=True)
+    run_case('unknown initial auto state keeps recovery and disables exit', [['bad', 'bad'], ['up']], [420, 900], policy=0, empty_read=True)
+    run_case('failed nonempty download preserves last dashboard', [['up'], ['up'], ['up']], [900, 900, 900], failed_image=True)
+    run_case('timeout during activation retry', [['bad', 'bad']], [420], hang_retry_off=True)
