@@ -15,7 +15,7 @@ import json, os, pathlib, signal, sys, time
 p = pathlib.Path(os.environ['CASE_DIR'])
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 if name == 'sleep' and os.environ.get('TEST_MAIN_PID') and os.getppid() != int(os.environ['TEST_MAIN_PID']):
-    time.sleep(.2); sys.exit(0)
+    time.sleep(2); sys.exit(0)
 state = json.loads((p/'state').read_text())
 plans = json.loads(os.environ['PLANS'])
 interface = p/'sys/class/net/wlan0'

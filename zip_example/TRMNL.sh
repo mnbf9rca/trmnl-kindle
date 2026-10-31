@@ -172,14 +172,18 @@ for f in /sys/class/input/event*/device/capabilities/key; do
 done
 power_exit() (
   r= w= cancelled=0
-  trap 'trap "" TERM INT HUP; kill "$r" "$w" 2>/dev/null; wait "$r" "$w" 2>/dev/null; exec 3<&-; rm -f "$TMP_DIR/power-event"' EXIT
+  trap 'trap "" TERM INT HUP; kill "$r" "$w" 2>/dev/null
+        wait "$r" "$w" 2>/dev/null; exec 3<&-; rm -f "$TMP_DIR/power-event"' EXIT
   trap 'cancelled=1; kill "$r" "$w" 2>/dev/null' TERM INT HUP
   eips 0 0 "Press power to exit" && exec 3<"$POWER" || exit 1
   end=$(cat "$RTC/since_epoch"); valid_time "$end" || exit 1; end=$((end + 10))
-  while now=$(cat "$RTC/since_epoch") && valid_time "$now" && [ "$now" -ge "$((end - 10))" ] && [ "$now" -lt "$end" ]; do
+  while now=$(cat "$RTC/since_epoch") && valid_time "$now" &&
+      [ "$now" -ge "$((end - 10))" ] && [ "$now" -lt "$end" ]; do
     dd bs=16 count=1 <&3 >"$TMP_DIR/power-event" 2>/dev/null & r=$!
     (
-      trap - EXIT; s=; t=0; trap 'trap "" TERM INT HUP; t=1; kill "$s" 2>/dev/null; wait "$s" 2>/dev/null' TERM INT HUP
+      trap - EXIT; s=; t=0
+      trap 'trap "" TERM INT HUP; t=1; kill "$s" 2>/dev/null
+            wait "$s" 2>/dev/null' TERM INT HUP
       exec 3<&-; sleep "$((end - now))" & s=$!; [ "$t" = 0 ] || kill "$s" 2>/dev/null
       wait "$s"; [ "$t" = 0 ] && kill "$r" 2>/dev/null
     ) & w=$!
@@ -187,10 +191,13 @@ power_exit() (
     wait "$r"; status=$?; [ "$cancelled" = 0 ] || exit 1; r=
     kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; [ "$cancelled" = 0 ] || exit 1; w=
     [ "$status" = 0 ] || exit 1
-    now=$(cat "$RTC/since_epoch"); valid_time "$now" && [ "$now" -ge "$((end - 10))" ] && [ "$now" -lt "$end" ] || exit 1
     # Map bytes before command substitution can drop NULs or trailing newlines.
     record=$(tr -c '\000\001\164' X <"$TMP_DIR/power-event" | tr '\000\001\164' 01P)
-    case "$cancelled:$record" in 0:????????10P01000) exit 0;; 0:????????10P00000|0:????????0000????) ;; *) exit 1;; esac
+    case "$cancelled:$record" in
+      0:????????10P01000) exit 0;;
+      0:????????10P00000|0:????????0000????) ;;
+      *) exit 1;;
+    esac
   done
   exit 1
 ) 2>/dev/null
@@ -200,7 +207,9 @@ init
 REFRESH_RATE=$MIN_REFRESH_RATE
 while true; do
   now=$(cat "$RTC/since_epoch" 2>/dev/null)
-  if [ -n "$POWER" ] && [ -r "$POWER" ] && [ -s "$LAST" ] && valid_time "$T0" && valid_time "$now" && valid_time "$REFRESH_RATE" && [ "$now" -ge "$T0" ] && [ "$((now - T0))" -lt "$((REFRESH_RATE + 5))" ]; then
+  if [ -n "$POWER" ] && [ -r "$POWER" ] && [ -s "$LAST" ] &&
+      valid_time "$T0" && valid_time "$now" && valid_time "$REFRESH_RATE" &&
+      [ "$now" -ge "$T0" ] && [ "$((now - T0))" -lt "$((REFRESH_RATE + 5))" ]; then
     power_exit && exit 0
     eips -g "$LAST" || LAST=
   fi
