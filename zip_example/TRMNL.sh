@@ -153,6 +153,7 @@ restore() {
   [ -z "$ORIG_WIFI" ] || lipc-set-prop com.lab126.cmd wirelessEnable "$ORIG_WIFI"
   /etc/init.d/framework start 2>/dev/null || {
     start lab126_gui >/dev/null 2>&1 || initctl start lab126_gui >/dev/null 2>&1
+    start framework >/dev/null 2>&1
   }
   initctl start webreader >/dev/null 2>&1
 } >/dev/null 2>&1

@@ -73,7 +73,11 @@ elif name == 'test-suspend':
     alarm = next(p.glob('sys/class/rtc/rtc*/wakealarm'))
     event('suspend', alarm.read_text().strip(), state['wifi'])
     state['cycle'] += 1; state['retry'] = 0; save()
-    if state['cycle'] == len(plans): sys.exit(99)
+    if state['cycle'] == len(plans):
+        if state['term_on_stop']:
+            event('term')
+            os.kill(os.getppid(), signal.SIGTERM)
+        sys.exit(99)
     update_interface()
 '''
 
@@ -123,11 +127,13 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
         # TRMNL.sh must redirect it first: the empty-stderr check below catches any write error.
         command = ['bash', '-c', 'exec >&-; exec bash ./TRMNL.sh'] if closed_stdout else ['bash', './TRMNL.sh']
         result = subprocess.run(command, cwd=p, env=env, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 99 and not result.stderr, (name, result.returncode, result.stderr)
+        assert result.returncode == (143 if check_restore else 99) and not result.stderr, (name, result.returncode, result.stderr)
         events = [json.loads(line) for line in (p/'events').read_text().splitlines()]
         if check_restore:
             cleanup = [e[1:] for e in events if e[0] == len(plans)]
+            assert cleanup[0] == ['term'], (name, cleanup)
             assert ['start', 'lab126_gui'] in cleanup, (name, cleanup)
+            assert ['start', 'framework'] in cleanup, (name, cleanup)
             assert ['start', 'webreader'] in cleanup, (name, cleanup)
             assert ['screensaver', '0'] in cleanup, (name, cleanup)
             assert ['wifi', initial] in cleanup, (name, cleanup)
