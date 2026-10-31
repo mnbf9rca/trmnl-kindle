@@ -246,9 +246,9 @@ while true; do
   eips_debug "Downloading image..."
 
   # Download the image directly from IMAGE_URL
-  curl -sL -o "$IMAGE_PATH" \
+  curl -fsL -o "$IMAGE_PATH" \
     -A "$USER_AGENT" \
-    "$IMAGE_URL"
+    "$IMAGE_URL" || rm -f "$IMAGE_PATH"
 
   # Check download success
   if [ ! -s "$IMAGE_PATH" ]; then
