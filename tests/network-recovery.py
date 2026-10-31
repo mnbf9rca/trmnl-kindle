@@ -22,7 +22,7 @@ def event(*value):
     with (p/'events').open('a') as f:
         f.write(json.dumps([state['cycle'], *value])+'\n')
 def mode():
-    return plans[state['cycle']][state['retry']]
+    return plans[min(state['cycle'], len(plans)-1)][state['retry']]
 def update_interface():
     if state['wifi'] == 1 and mode() != 'bad':
         interface.mkdir(parents=True, exist_ok=True)
@@ -32,12 +32,20 @@ if name == 'ping':
     sys.exit(0 if interface.exists() and mode() != 'icmp' else 1)
 elif name == 'lipc-get-prop':
     if args[-1] == 'wirelessEnable':
-        if state.pop('empty_read', False): save()
+        if state['empty_read']:
+            state['empty_read'] -= 1; save()
         else: print(state['wifi'])
     elif args[-1] == 'status': print('Battery Level: 50%')
 elif name == 'lipc-set-prop' and args[-2] == 'wirelessEnable':
     state['wifi'] = int(args[-1]); save(); update_interface()
     event('wifi', state['wifi'])
+elif name == 'lipc-set-prop' and args[-2] == 'preventScreenSaver':
+    event('screensaver', args[-1])
+elif name == 'test-framework':
+    sys.exit(0 if args == ['stop'] else 1)
+elif name == 'start' or (name == 'initctl' and args[0] == 'start'):
+    event('start', args[-1])
+    event('alarm', next(p.glob('sys/class/rtc/rtc*/wakealarm')).read_text().strip())
 elif name == 'eips':
     if args == ['-i']: print('xres: 600 yres: 800')
     elif not args: print('usage -y')
@@ -68,27 +76,29 @@ elif name == 'test-suspend':
 '''
 
 
-def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=False, closed_stdout=False, rtc='rtc1'):
+def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=False, closed_stdout=False, rtc='rtc1', check_restore=False):
     with tempfile.TemporaryDirectory() as directory:
         p = Path(directory)
         (p/'bin').mkdir()
-        for command in ['ping', 'lipc-get-prop', 'lipc-set-prop', 'eips', 'curl', 'sleep', 'test-suspend', 'initctl']:
+        for command in ['ping', 'lipc-get-prop', 'lipc-set-prop', 'eips', 'curl', 'sleep', 'test-suspend', 'initctl', 'start', 'test-framework']:
             path = p/'bin'/command
             path.write_text(STUB)
             path.chmod(0o755)
-        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=empty_read)))
+        # Both startup reads are unknown: original state capture and WIFI_AUTO policy.
+        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=2 if empty_read else 0)))
         if initial == 1 and plans[0][0] != 'bad':
             (p/'sys/class/net/wlan0').mkdir(parents=True)
         (p/'events').touch()
         (p/'wifi-error.png').write_bytes((ROOT/'zip_example/wifi-error.png').read_bytes())
         for filename in [f'sys/class/rtc/{rtc}/wakealarm', 'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor']:
             (p/filename).parent.mkdir(parents=True, exist_ok=True)
+        (p/'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor').write_text('ondemand')
         # Copy only known source files, never credentials or a user's config.
         for filename in ['TRMNL.sh', 'utils.sh', 'wait-for-wifi.sh']:
             script = (ROOT/'zip_example'/filename).read_text()
             if filename == 'TRMNL.sh':
                 replacements = {
-                    '/etc/init.d/framework stop': ':',
+                    '/etc/init.d/framework': 'test-framework',
                     'MAC_ADDRESS=$(get_mac_address)': 'MAC_ADDRESS=TEST_MAC',
                     'echo "mem" > /sys/power/state': 'test-suspend || exit $?',
                     '/sys/': str(p/'sys')+'/',
@@ -113,6 +123,14 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
         result = subprocess.run(command, cwd=p, env=env, capture_output=True, text=True, timeout=30)
         assert result.returncode == 99 and not result.stderr, (name, result.returncode, result.stderr)
         events = [json.loads(line) for line in (p/'events').read_text().splitlines()]
+        if check_restore:
+            cleanup = [e[1:] for e in events if e[0] == len(plans)]
+            assert ['start', 'lab126_gui'] in cleanup, (name, cleanup)
+            assert ['start', 'webreader'] in cleanup, (name, cleanup)
+            assert ['screensaver', '0'] in cleanup, (name, cleanup)
+            assert ['wifi', initial] in cleanup, (name, cleanup)
+            assert ['alarm', '0'] in cleanup, (name, cleanup)
+            assert (p/'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor').read_text().strip() == 'ondemand', name
         for cycle, (plan, delay) in enumerate(zip(plans, delays)):
             actual = [e[1:] for e in events if e[0] == cycle]
             failed = plan[-1] == 'bad'
@@ -169,3 +187,4 @@ if __name__ == '__main__':
     run_case('debug failure retains upstream diagnostics', [['up'], ['bad', 'bad']], [900, 900], debug=True)
     run_case('unknown initial auto state sleeps with Wi-Fi off', [['up']], [900], policy=0, empty_read=True)
     run_case('wake alarm on rtc0 (11th gen Kindle)', [['up'], ['up']], [900, 900], rtc='rtc0')
+    run_case('exit restores Kindle UI and settings', [['up']], [900], check_restore=True)
