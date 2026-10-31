@@ -4,7 +4,7 @@
   <rect x="8" y="8" width="944" height="304" rx="16" fill="white" stroke="black" stroke-opacity="1" stroke-width="16"/>
   <g id="power-button" fill="white" stroke="black" stroke-opacity="1" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
     <path d="M189 103A80 80 0 1 1 77 103M133 60V140" fill="none"/>
-    <path d="M329.9 163.5L292.1 190.8Q280.9 198.5 274.6 191.5Q269 185.2 277.4 178.2L287.9 168.4L224.2 168.4Q213 168.4 213 160Q213 150.9 224.2 150.9L260.6 150.9Q252.9 145.3 259.2 137.6Q255.7 130.6 266.9 125Q263.4 117.3 274.6 113.1L290.7 107.5Q304 104 317.3 112.4L329.9 119.4Z" stroke-width="14"/>
+    <path d="M307.35 165.25L250.65 206.2Q233.85 217.75 224.4 207.25Q216 197.8 228.6 187.3L244.35 172.6L148.8 172.6Q132 172.6 132 160Q132 146.35 148.8 146.35L203.4 146.35Q191.85 137.95 201.3 126.4Q196.05 115.9 212.85 107.5Q207.6 95.95 224.4 89.65L248.55 81.25Q268.5 76 288.45 88.6L307.35 99.1Z" stroke-width="16"/>
   </g>
   <g id="then" fill="none" stroke="black" stroke-opacity="1" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
     <path d="M361 160H523M486 122L525 160L486 198"/>

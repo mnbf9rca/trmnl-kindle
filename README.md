@@ -230,7 +230,7 @@ Launch KUAL from your Kindle library.
 
 Your Kindle is now successfully running TRMNL!
 
-When you wake the Kindle early with the power button, TRMNL shows a wordless "press power to exit" picture for ten seconds. Press the power button again while it is shown and TRMNL exits and restores the Kindle UI. Without confirmation, TRMNL redraws the last image and continues refreshing; devices without a unique power-key input skip the prompt. Returning to the Kindle UI may show a startup progress bar without rebooting the device.
+When you wake the Kindle early with the power button, TRMNL shows a wordless "press power to exit" picture for ten seconds. Press the power button again while it is shown and TRMNL shows a check mark picture, then exits and restores the Kindle UI. Without confirmation, TRMNL redraws the last image and continues refreshing; devices without a unique power-key input skip the prompt. Returning to the Kindle UI may show a startup progress bar without rebooting the device.
 
 <kdb><img src="https://github.com/usetrmnl/trmnl-kindle/blob/main/images/trmnl-kindle-alpha-release.jpeg" width="650px"></kdb>
 

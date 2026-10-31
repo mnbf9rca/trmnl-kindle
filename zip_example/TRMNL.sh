@@ -248,7 +248,7 @@ while true; do
     sleep 20
     lipc-set-prop com.lab126.cmd wirelessEnable 1
     if ! wifi_up; then
-      draw "$DIR/wifi-error.png" && LAST="$DIR/wifi-error.png" || LAST=
+      draw "$DIR/wifi-error.png"
       lipc-set-prop com.lab126.cmd wirelessEnable 0
       go_to_sleep
       continue
