@@ -96,11 +96,15 @@ init() {
   # Newer firmware (seen on 5.19.2 on the 11th gen Kindle) runs the UI as upstart jobs
   # and has no init.d framework script. Without this the UI keeps running, its status
   # icons are drawn over the dashboard, and the suspend below is refused.
+  # The framework job signals its group, including scripts launched from KUAL.
+  # Ignore these signals while stopping the UI, as KOReader does.
+  trap '' TERM INT HUP
   /etc/init.d/framework stop 2>/dev/null || {
     stop framework >/dev/null 2>&1 || initctl stop framework >/dev/null 2>&1
     stop lab126_gui >/dev/null 2>&1
   }
   initctl stop webreader >/dev/null 2>&1
+  trap 'exit 143' TERM INT HUP
   echo powersave >/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
   lipc-set-prop com.lab126.powerd preventScreenSaver 1
   

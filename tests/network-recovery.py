@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Only device commands are faked; the production loop and readiness helper run.
 STUB = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, signal, sys
 p = pathlib.Path(os.environ['CASE_DIR'])
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 state = json.loads((p/'state').read_text())
@@ -42,6 +42,8 @@ elif name == 'lipc-set-prop' and args[-2] == 'wirelessEnable':
 elif name == 'lipc-set-prop' and args[-2] == 'preventScreenSaver':
     event('screensaver', args[-1])
 elif name == 'test-framework':
+    if args == ['stop'] and state['term_on_stop']:
+        os.kill(os.getppid(), signal.SIGTERM)
     sys.exit(0 if args == ['stop'] else 1)
 elif name == 'start' or (name == 'initctl' and args[0] == 'start'):
     event('start', args[-1])
@@ -85,7 +87,7 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
             path.write_text(STUB)
             path.chmod(0o755)
         # Both startup reads are unknown: original state capture and WIFI_AUTO policy.
-        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=2 if empty_read else 0)))
+        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=2 if empty_read else 0, term_on_stop=check_restore)))
         if initial == 1 and plans[0][0] != 'bad':
             (p/'sys/class/net/wlan0').mkdir(parents=True)
         (p/'events').touch()
