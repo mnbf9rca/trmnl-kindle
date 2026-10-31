@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="320" viewBox="0 0 960 320" stroke-opacity="1" role="img" aria-labelledby="title desc">
+  <title id="title">Press the power button to exit</title>
+  <desc id="desc">A finger presses a power symbol, then an arrow points to an open exit door.</desc>
+  <rect x="8" y="8" width="944" height="304" rx="16" fill="white" stroke="black" stroke-opacity="1" stroke-width="16"/>
+  <g id="power-button" fill="white" stroke="black" stroke-opacity="1" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M189 103A80 80 0 1 1 77 103M133 60V140" fill="none"/>
+    <path d="M368.774 243.619L305.825 274.101Q287.274 282.559 279.791 270.577Q273.16 259.812 287.392 251.66L305.455 239.918L211.357 223.326Q194.812 220.409 197 208Q199.37 194.557 215.915 197.475L269.686 206.956Q259.77 196.678 271.082 186.944Q267.735 175.692 285.738 170.337Q282.574 158.051 300.212 154.764L325.454 150.685Q346.013 148.979 363.472 164.852L380.261 178.474Z" stroke-width="16"/>
+  </g>
+  <g id="then" fill="none" stroke="black" stroke-opacity="1" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M426 160H523M486 122L525 160L486 198"/>
+  </g>
+  <g id="exit-door" stroke="black" stroke-opacity="1" stroke-width="16" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M668 269V54H805V269" fill="none"/>
+    <path d="M668 54L609 90V278L668 246Z" fill="white"/>
+    <path d="M652 160V177" fill="none" stroke-width="16"/>
+    <path d="M738 162H876M839 125L878 162L839 199" fill="none" stroke="white" stroke-opacity="1" stroke-width="28"/>
+    <path d="M738 162H876M839 125L878 162L839 199" fill="none" stroke-width="16"/>
+  </g>
+</svg>

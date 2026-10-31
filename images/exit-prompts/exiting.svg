@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="320" viewBox="0 0 960 320" stroke-opacity="1" role="img" aria-labelledby="title desc">
+  <title id="title">Exiting</title>
+  <desc id="desc">An open exit door with an outward arrow, followed by a check mark.</desc>
+  <rect x="8" y="8" width="944" height="304" rx="16" fill="white" stroke="black" stroke-opacity="1" stroke-width="16"/>
+  <g id="exit-door" transform="translate(-420 0)" stroke="black" stroke-opacity="1" stroke-width="16" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M668 269V54H805V269" fill="none"/>
+    <path d="M668 54L609 90V278L668 246Z" fill="white"/>
+    <path d="M652 160V177" fill="none" stroke-width="16"/>
+    <path d="M738 162H876M839 125L878 162L839 199" fill="none" stroke="white" stroke-opacity="1" stroke-width="28"/>
+    <path d="M738 162H876M839 125L878 162L839 199" fill="none" stroke-width="16"/>
+  </g>
+  <path d="M560 160L630 230L800 65" fill="none" stroke="black" stroke-opacity="1" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
