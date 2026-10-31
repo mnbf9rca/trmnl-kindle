@@ -51,6 +51,10 @@ elif name == 'curl':
     assert state['wifi'] == 1 and interface.exists(), 'fetch without network'
     event('image' if '-o' in args else 'metadata')
     if '-o' in args:
+        if state['cycle'] == 1 and state.pop('failed_image', False):
+            pathlib.Path(args[args.index('-o')+1]).write_text('partial')
+            event('failed-image'); save()
+            sys.exit(18)
         pathlib.Path(args[args.index('-o')+1]).write_text('image')
     else:
         print('{"image_url":"https://example.invalid/image","filename":"display.png","refresh_rate":900}')
@@ -68,7 +72,7 @@ elif name == 'test-suspend':
 '''
 
 
-def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=False, closed_stdout=False, rtc='rtc1'):
+def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=False, closed_stdout=False, rtc='rtc1', failed_image=False):
     with tempfile.TemporaryDirectory() as directory:
         p = Path(directory)
         (p/'bin').mkdir()
@@ -76,7 +80,7 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
             path = p/'bin'/command
             path.write_text(STUB)
             path.chmod(0o755)
-        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=empty_read)))
+        (p/'state').write_text(json.dumps(dict(cycle=0, retry=0, wifi=initial, empty_read=empty_read, failed_image=failed_image)))
         if initial == 1 and plans[0][0] != 'bad':
             (p/'sys/class/net/wlan0').mkdir(parents=True)
         (p/'events').touch()
@@ -121,7 +125,13 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
             if plan[0] == 'bad':
                 retry = actual.index(['sleep', 20])
                 assert actual[retry-1:retry+2] == [['wifi', 0], ['sleep', 20], ['wifi', 1]], (name, actual)
-            assert actual.count(['metadata']) == (0 if failed else 1), (name, actual)
+            if failed_image and cycle == 1:
+                failure = actual.index(['failed-image'])
+                assert ['sleep', 60] in actual, (name, actual)
+                retry = actual.index(['sleep', 60])
+                assert not any(e[:2] in (['screen', '-c'], ['screen', '-g']) for e in actual[failure:retry]), (name, actual)
+                assert any(e[:2] == ['screen', '-g'] for e in actual[retry+1:]), (name, actual)
+            assert actual.count(['metadata']) == (0 if failed else 1 + int(failed_image and cycle == 1)), (name, actual)
             screens = [e for e in actual if e[0] == 'screen']
             if failed:
                 if debug:
@@ -169,3 +179,4 @@ if __name__ == '__main__':
     run_case('debug failure retains upstream diagnostics', [['up'], ['bad', 'bad']], [900, 900], debug=True)
     run_case('unknown initial auto state sleeps with Wi-Fi off', [['up']], [900], policy=0, empty_read=True)
     run_case('wake alarm on rtc0 (11th gen Kindle)', [['up'], ['up']], [900, 900], rtc='rtc0')
+    run_case('failed partial download preserves dashboard and retries', [['up'], ['up']], [900, 900], failed_image=True)
