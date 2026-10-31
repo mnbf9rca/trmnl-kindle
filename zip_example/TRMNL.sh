@@ -33,6 +33,8 @@ DIR="$(dirname "$0")"
 # Temporary folder to hold downloaded files
 TMP_DIR="/tmp/trmnl-kindle"
 mkdir -p "$TMP_DIR"
+RTC=/sys/class/rtc/rtc1
+[ -d "$RTC" ] || RTC=/sys/class/rtc/rtc0
 
 # Coordinates for displaying the PNG in *pixels*
 DISPLAY_X=0
@@ -89,14 +91,20 @@ eips_debug() {
 }
 
 init() {
+  ORIG_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)
+  ORIG_WIFI=$(lipc-get-prop com.lab126.cmd wirelessEnable 2>/dev/null)
   # Newer firmware (seen on 5.19.2 on the 11th gen Kindle) runs the UI as upstart jobs
   # and has no init.d framework script. Without this the UI keeps running, its status
   # icons are drawn over the dashboard, and the suspend below is refused.
+  # The framework job signals its group, including scripts launched from KUAL.
+  # Ignore these signals while stopping the UI, as KOReader does.
+  trap '' TERM INT HUP
   /etc/init.d/framework stop 2>/dev/null || {
     stop framework >/dev/null 2>&1 || initctl stop framework >/dev/null 2>&1
     stop lab126_gui >/dev/null 2>&1
   }
   initctl stop webreader >/dev/null 2>&1
+  trap 'exit 143' TERM INT HUP
   echo powersave >/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
   lipc-set-prop com.lab126.powerd preventScreenSaver 1
   
@@ -132,13 +140,26 @@ go_to_sleep() {
   # The wake alarm is rtc1 on most models but rtc0 on others (e.g. the 11th gen
   # Kindle). Suspend only if the alarm write succeeds. Without an alarm, the Kindle
   # sleeps until the power button. If any step fails, sleep for the interval instead.
-  RTC=/sys/class/rtc/rtc1
-  [ -d "$RTC" ] || RTC=/sys/class/rtc/rtc0
   echo 0 > "$RTC/wakealarm" &&
     echo "+${REFRESH_RATE}" > "$RTC/wakealarm" &&
     echo "mem" > /sys/power/state || sleep "$REFRESH_RATE"
 }
 
+restore() {
+  trap '' TERM INT HUP
+  echo 0 > "$RTC/wakealarm"
+  [ -z "$ORIG_GOVERNOR" ] || echo "$ORIG_GOVERNOR" > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+  lipc-set-prop com.lab126.powerd preventScreenSaver 0
+  [ -z "$ORIG_WIFI" ] || lipc-set-prop com.lab126.cmd wirelessEnable "$ORIG_WIFI"
+  /etc/init.d/framework start 2>/dev/null || {
+    start lab126_gui >/dev/null 2>&1 || initctl start lab126_gui >/dev/null 2>&1
+    start framework >/dev/null 2>&1
+  }
+  initctl start webreader >/dev/null 2>&1
+} >/dev/null 2>&1
+
+trap restore EXIT
+trap 'exit 143' TERM INT HUP
 init
 REFRESH_RATE=$MIN_REFRESH_RATE
 while true; do
