@@ -142,6 +142,7 @@ go_to_sleep() {
 }
 
 restore() {
+  trap '' TERM INT HUP
   echo 0 > "$RTC/wakealarm"
   [ -z "$ORIG_GOVERNOR" ] || echo "$ORIG_GOVERNOR" > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
   lipc-set-prop com.lab126.powerd preventScreenSaver 0
@@ -152,9 +153,9 @@ restore() {
   initctl start webreader >/dev/null 2>&1
 } >/dev/null 2>&1
 
-init
 trap restore EXIT
 trap 'exit 143' TERM INT HUP
+init
 REFRESH_RATE=$MIN_REFRESH_RATE
 while true; do
   # Clear the screen only if in debug mode, otherwise clear right before displaying the image
