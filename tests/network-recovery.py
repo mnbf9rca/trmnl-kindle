@@ -102,7 +102,8 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
         if initial == 1 and plans[0][0] != 'bad':
             (p/'sys/class/net/wlan0').mkdir(parents=True)
         (p/'events').touch()
-        (p/'wifi-error.png').write_bytes((ROOT/'zip_example/wifi-error.png').read_bytes())
+        for filename in ['wifi-error.png', 'exit-prompt.png', 'exit-confirmed.png']:
+            (p/filename).write_bytes((ROOT/'zip_example'/filename).read_bytes())
         for filename in [f'sys/class/rtc/{rtc}/wakealarm', 'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor']:
             (p/filename).parent.mkdir(parents=True, exist_ok=True)
         (p/'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor').write_text('ondemand')
@@ -158,13 +159,17 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
             assert ['alarm', '0'] in cleanup, (name, cleanup)
             assert (p/'sys/devices/system/cpu/cpu0/cpufreq/scaling_governor').read_text().strip() == 'ondemand', name
         if early_exit:
-            prompts = [i for i, e in enumerate(events) if e[1:4] == ['screen', '0', '0']]
+            prompts = [i for i, e in enumerate(events) if e[1:4] == ['screen', '-g', './exit-prompt.png']]
             assert len(prompts) == 1, (name, events)
+            position = ['-x', '0', '-y', '0']
+            assert events[prompts[0]][4:] == position, (name, events)
             after = events[prompts[0]+1:]
             if early_exit == 'confirm':
+                assert after[0][1:] == ['screen', '-g', './exit-confirmed.png', *position], (name, after)
+                assert not any(e[1] == 'start' or e[1:] == ['screensaver', '0'] for e in events[:prompts[0]+1]), (name, events)
                 assert not any(e[1] in ('metadata', 'image') for e in after), (name, after)
             else:
-                assert after[0][1:] == ['screen', '-g', str(p/'cache/display.png')], (name, after)
+                assert after[0][1:] == ['screen', '-g', str(p/'cache/display.png'), *position], (name, after)
                 assert any(e[1] == 'image' for e in after[1:]), (name, after)
             assert not (p/'cache/power-event').exists(), 'input scratch file leaked'
             print('PASS', name)
@@ -183,12 +188,12 @@ def run_case(name, plans, delays, policy=2, initial=1, debug=False, empty_read=F
                 if debug:
                     assert screens[0] == ['screen', '-c'], (name, screens)
                     assert ['screen', '0', '0', 'TRMNL Kindle Debug Script'] in screens, (name, screens)
-                    assert ['screen', '-g', './wifi-error.png'] in screens, (name, screens)
+                    assert ['screen', '-g', './wifi-error.png', '-x', '0', '-y', '0'] in screens, (name, screens)
                 else:
-                    assert screens == [['screen', '-g', './wifi-error.png']], (name, screens)
+                    assert screens == [['screen', '-g', './wifi-error.png', '-x', '0', '-y', '0']], (name, screens)
                 assert actual[-1][-1] == 0, (name, actual)  # failed attempts sleep with radio off
             else:
-                assert ['screen', '-g', './wifi-error.png'] not in screens, (name, screens)
+                assert not any(e[1:3] == ['-g', './wifi-error.png'] for e in screens), (name, screens)
                 assert ['screen', '-c'] in screens and any(e[1] == '-g' for e in screens), (name, screens)
                 assert screens.index(['screen', '-c']) < next(i for i, e in enumerate(screens) if e[1] == '-g')
                 policy_state = (0 if empty_read else initial) if policy == 0 else int(policy == 1)

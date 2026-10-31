@@ -159,6 +159,16 @@ restore() {
   initctl start webreader >/dev/null 2>&1
 } >/dev/null 2>&1
 
+draw() {
+  # Old Kindles (e.g. Kindle 4) lack -x -y for image display.
+  if eips | grep -q -v "\-y"; then
+    eips_debug "Using compatiblity mode for image plotting"
+    eips -g "$1"
+  else
+    eips -g "$1" -x "${DISPLAY_X:-0}" -y "${DISPLAY_Y:-0}"
+  fi
+}
+
 valid_time() { case "$1" in ''|*[!0-9]*|0*|???????????*) return 1;; esac; }
 POWER= T0= LAST=
 for f in /sys/class/input/event*/device/capabilities/key; do
@@ -175,7 +185,7 @@ power_exit() (
   trap 'trap "" TERM INT HUP; kill "$r" "$w" 2>/dev/null
         wait "$r" "$w" 2>/dev/null; exec 3<&-; rm -f "$TMP_DIR/power-event"' EXIT
   trap 'cancelled=1; kill "$r" "$w" 2>/dev/null' TERM INT HUP
-  eips 0 0 "Press power to exit" && exec 3<"$POWER" || exit 1
+  draw "$DIR/exit-prompt.png" && exec 3<"$POWER" || exit 1
   end=$(cat "$RTC/since_epoch"); valid_time "$end" || exit 1; end=$((end + 10))
   while now=$(cat "$RTC/since_epoch") && valid_time "$now" &&
       [ "$now" -ge "$((end - 10))" ] && [ "$now" -lt "$end" ]; do
@@ -210,8 +220,8 @@ while true; do
   if [ -n "$POWER" ] && [ -r "$POWER" ] && [ -s "$LAST" ] &&
       valid_time "$T0" && valid_time "$now" && valid_time "$REFRESH_RATE" &&
       [ "$now" -ge "$T0" ] && [ "$((now - T0))" -lt "$((REFRESH_RATE + 5))" ]; then
-    power_exit && exit 0
-    eips -g "$LAST" || LAST=
+    power_exit && { draw "$DIR/exit-confirmed.png"; exit 0; }
+    draw "$LAST" || LAST=
   fi
   T0=
   # Clear the screen only if in debug mode, otherwise clear right before displaying the image
@@ -238,7 +248,7 @@ while true; do
     sleep 20
     lipc-set-prop com.lab126.cmd wirelessEnable 1
     if ! wifi_up; then
-      eips -g "$DIR/wifi-error.png" && LAST="$DIR/wifi-error.png" || LAST=
+      draw "$DIR/wifi-error.png" && LAST="$DIR/wifi-error.png" || LAST=
       lipc-set-prop com.lab126.cmd wirelessEnable 0
       go_to_sleep
       continue
@@ -337,15 +347,7 @@ while true; do
   # Always clear screen before showing the image
   eips -c
   sleep 1
-  # eips on particular old Kindles (e.g. Kindle 4) does not support -x -y for
-  # image display (-g). Try to naively detect this by checking for -y existence
-  # in the usage strings
-  if eips | grep -q -v "\-y" ; then
-    eips_debug "Using compatiblity mode for image plotting"
-    eips -g "$IMAGE_PATH" && LAST="$IMAGE_PATH" || LAST=
-  else
-    eips -g "$IMAGE_PATH" -x "$DISPLAY_X" -y "$DISPLAY_Y" && LAST="$IMAGE_PATH" || LAST=
-  fi
+  draw "$IMAGE_PATH" && LAST="$IMAGE_PATH" || LAST=
 
   # 6) Print full URL & filename below the displayed image only if debug mode is on
   if [ "$DEBUG_MODE" = true ]; then
