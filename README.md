@@ -230,6 +230,8 @@ Launch KUAL from your Kindle library.
 
 Your Kindle is now successfully running TRMNL!
 
+Between refreshes, press Power to wake the Kindle, then press Power again within ten seconds when prompted to return to the Kindle UI. Without confirmation, TRMNL redraws the last image and continues refreshing; devices without a unique power-key input skip the prompt. Returning to the Kindle UI may show a startup progress bar without rebooting the device.
+
 <kdb><img src="https://github.com/usetrmnl/trmnl-kindle/blob/main/images/trmnl-kindle-alpha-release.jpeg" width="650px"></kdb>
 
 **Troubleshooting JSON error**

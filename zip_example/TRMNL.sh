@@ -129,6 +129,7 @@ wifi_up() {
 }
 
 go_to_sleep() {
+  T0=$(cat "$RTC/since_epoch" 2>/dev/null)
   eips_debug "Sleeping for $REFRESH_RATE seconds..."
   if [ "$INITIAL_WIFI_STATE" != 1 ]; then
     eips_debug "Disabling WiFi"
@@ -158,11 +159,52 @@ restore() {
   initctl start webreader >/dev/null 2>&1
 } >/dev/null 2>&1
 
+valid_time() { case "$1" in ''|*[!0-9]*|0*|???????????*) return 1;; esac; }
+POWER= T0= LAST=
+for f in /sys/class/input/event*/device/capabilities/key; do
+  set -- $(cat "$f" 2>/dev/null)
+  [ "$#" -ge 4 ] || continue
+  while [ "$#" -gt 4 ]; do shift; done
+  case "$1" in ''|*[!0-9a-fA-F]*|?????????*) continue;; esac
+  [ "$((0x$1 & 0x100000))" -ne 0 ] || continue
+  [ -z "$POWER" ] || { POWER=; break; }
+  node=${f%/device/capabilities/key}; POWER=/dev/input/${node##*/}
+done
+power_exit() (
+  r= w= cancelled=0
+  trap 'trap "" TERM INT HUP; kill "$r" "$w" 2>/dev/null; wait "$r" "$w" 2>/dev/null; exec 3<&-; rm -f "$TMP_DIR/power-event"' EXIT
+  trap 'cancelled=1; kill "$r" "$w" 2>/dev/null' TERM INT HUP
+  eips 0 0 "Press power to exit" && exec 3<"$POWER" || exit 1
+  end=$(cat "$RTC/since_epoch"); valid_time "$end" || exit 1; end=$((end + 10))
+  while now=$(cat "$RTC/since_epoch") && valid_time "$now" && [ "$now" -ge "$((end - 10))" ] && [ "$now" -lt "$end" ]; do
+    dd bs=16 count=1 <&3 >"$TMP_DIR/power-event" 2>/dev/null & r=$!
+    (
+      trap - EXIT; s=; t=0; trap 'trap "" TERM INT HUP; t=1; kill "$s" 2>/dev/null; wait "$s" 2>/dev/null' TERM INT HUP
+      exec 3<&-; sleep "$((end - now))" & s=$!; [ "$t" = 0 ] || kill "$s" 2>/dev/null
+      wait "$s"; [ "$t" = 0 ] && kill "$r" 2>/dev/null
+    ) & w=$!
+    [ "$cancelled" = 0 ] || exit 1
+    wait "$r"; status=$?; [ "$cancelled" = 0 ] || exit 1; r=
+    kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; [ "$cancelled" = 0 ] || exit 1; w=
+    [ "$status" = 0 ] || exit 1
+    now=$(cat "$RTC/since_epoch"); valid_time "$now" && [ "$now" -ge "$((end - 10))" ] && [ "$now" -lt "$end" ] || exit 1
+    # Map bytes before command substitution can drop NULs or trailing newlines.
+    record=$(tr -c '\000\001\164' X <"$TMP_DIR/power-event" | tr '\000\001\164' 01P)
+    case "$cancelled:$record" in 0:????????10P01000) exit 0;; 0:????????10P00000|0:????????0000????) ;; *) exit 1;; esac
+  done
+  exit 1
+) 2>/dev/null
 trap restore EXIT
 trap 'exit 143' TERM INT HUP
 init
 REFRESH_RATE=$MIN_REFRESH_RATE
 while true; do
+  now=$(cat "$RTC/since_epoch" 2>/dev/null)
+  if [ -n "$POWER" ] && [ -r "$POWER" ] && [ -s "$LAST" ] && valid_time "$T0" && valid_time "$now" && valid_time "$REFRESH_RATE" && [ "$now" -ge "$T0" ] && [ "$((now - T0))" -lt "$((REFRESH_RATE + 5))" ]; then
+    power_exit && exit 0
+    eips -g "$LAST" || LAST=
+  fi
+  T0=
   # Clear the screen only if in debug mode, otherwise clear right before displaying the image
   if [ "$DEBUG_MODE" = true ]; then
     eips -c
@@ -187,7 +229,7 @@ while true; do
     sleep 20
     lipc-set-prop com.lab126.cmd wirelessEnable 1
     if ! wifi_up; then
-      eips -g "$DIR/wifi-error.png"
+      eips -g "$DIR/wifi-error.png" && LAST="$DIR/wifi-error.png" || LAST=
       lipc-set-prop com.lab126.cmd wirelessEnable 0
       go_to_sleep
       continue
@@ -291,9 +333,9 @@ while true; do
   # in the usage strings
   if eips | grep -q -v "\-y" ; then
     eips_debug "Using compatiblity mode for image plotting"
-    eips -g "$IMAGE_PATH"
+    eips -g "$IMAGE_PATH" && LAST="$IMAGE_PATH" || LAST=
   else
-    eips -g "$IMAGE_PATH" -x "$DISPLAY_X" -y "$DISPLAY_Y"
+    eips -g "$IMAGE_PATH" -x "$DISPLAY_X" -y "$DISPLAY_Y" && LAST="$IMAGE_PATH" || LAST=
   fi
 
   # 6) Print full URL & filename below the displayed image only if debug mode is on
